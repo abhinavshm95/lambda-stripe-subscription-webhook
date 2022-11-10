@@ -1,5 +1,5 @@
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-const { ManagementClient } = require("auth0");
+const axios = require("axios");
 
 exports.handler = async event => {
     if (process.env.STRIPE_WEBHOOK_APP_SECRET) {
@@ -93,7 +93,6 @@ async function updateAuthZeroUserSubAppMetadata(authUserID, stripeSubData, lates
         const stripeSubscription = {
             status: stripeSubData.status,
             id: stripeSubData.id,
-            customer_id: stripeSubData.customer,
             latest_invoice_id: stripeSubData.latest_invoice,
             event_id: eventID,
             plan_id: stripeSubData.plan.id,
@@ -105,38 +104,57 @@ async function updateAuthZeroUserSubAppMetadata(authUserID, stripeSubData, lates
             hosted_invoice_url: latestSubInvoice.hosted_invoice_url,
         };
 
-        console.log("--stripeSubData.status--", stripeSubData.status);
-        console.log("--authUserID--", authUserID);
-
-        await updateUserMetadata(authUserID, stripeSubscription);
+        await updateUserMetadata(authUserID, stripeSubscription, stripeSubData.customer);
     } catch (error) {
         console.log("Error while updating the user subscription", error);
         throw new Error(error);
     }
 }
 
-async function updateUserMetadata(authUserID, stripeSubscription) {
-    return new Promise((resolve, reject) => {
-        console.log("--updating--auth--");
-        
-        const auth0 = new ManagementClient({
-            domain: process.env.AUTH_ZERO_DOMAIN,
-            token: "",
-        });
-
-        auth0.updateAppMetadata(
-            { id: authUserID },
-            {
-                stripe_subscription: stripeSubscription,
+async function updateUserMetadata(authUserID, stripeSubscription, customerID) {
+    const updateMetadataBody = JSON.stringify({
+        app_metadata: {
+            stripe: {
+                subscription: stripeSubscription,
+                customer_id: customerID,
             },
-            function (err, user) {
-                if (err) {
-                    console.log(err);
-                    reject(err);
-                }
-                console.log("user updated");
-                resolve(user);
-            }
-        );
+        },
     });
+
+    // get access token
+    const getAccessTokenData = JSON.stringify({
+        client_id: "QmtVg0jtbK3AmZMh7gjzbI25CLLaCADS",
+        client_secret: process.env.AUTH_ZERO_CLIENT_SECRET,
+        audience: "https://sabr-sports.us.auth0.com/api/v2/",
+        grant_type: "client_credentials",
+    });
+
+    const tokenConfig = {
+        method: "post",
+        url: "https://sabr-sports.us.auth0.com/oauth/token",
+        headers: {
+            "content-type": "application/json"
+        },
+        data: getAccessTokenData,
+    };
+
+    try {
+
+        const accessTokenRes = await axios(tokenConfig);
+
+        const updateAppdataConfig = {
+            method: "patch",
+            url: `https://${process.env.AUTH_ZERO_DOMAIN}/api/v2/users/` + authUserID,
+            headers: {
+                Authorization: `Bearer ${accessTokenRes.data.access_token}`,
+                "Content-Type": "application/json",
+            },
+            data: updateMetadataBody,
+        };
+
+        return await axios(updateAppdataConfig);
+    } catch (error) {
+        console.log("Error while updating the user subscription", error);
+        throw new Error(error);
+    }
 }
